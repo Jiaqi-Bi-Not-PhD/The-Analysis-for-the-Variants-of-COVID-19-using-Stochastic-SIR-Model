@@ -1,0 +1,798 @@
+---
+title: "STA450 HW1"
+author: "Ruichen Lu"
+date: "06/02/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Question 1
+
+```{r cars}
+library(utils)
+library(tidyverse)
+library(dplyr)
+#import data
+data_ecdc <- read.csv(
+"https://opendata.ecdc.europa.eu/covid19/nationalcasedeath_eueea_daily_ei/csv",
+na.strings = "", fileEncoding = "UTF-8-BOM")
+data_owid <- read.csv(
+"https://covid.ourworldindata.org/data/owid-covid-data.csv",
+na.strings = "", fileEncoding = "UTF-8-BOM")
+data_uk <- read.csv(paste0("https://api.coronavirus.data.gov.uk/v2/",
+"data?areaType=overview&metric=newCasesByPublishDate&format=csv"),
+na.strings="", fileEncoding = "UTF-8-BOM")
+data_india <-read.csv("https://prsindia.org/covid-19/cases/download")
+data_london <-read.csv(paste0(
+"https://data.london.gov.uk/download/coronavirus--covid-19--cases/",
+"d15e692d-5e58-4b6e-80f2-78df6f8b148b/phe_cases_age_london.csv"))
+data_ny <- read.csv(
+"https://raw.githubusercontent.com/nychealth/coronavirus-data/master/trends/cases-by-day.csv",
+na.strings = "", fileEncoding = "UTF-8-BOM")
+```
+
+
+
+
+```{r pressure, warning=FALSE}
+#Mahasthra Data
+data_india.maha <-data_india[data_india$Region == "Maharashtra",]
+data_india.maha$time= as.Date(as.character(data_india.maha$Date), format = '%d/%m/%Y')
+data_india.maha = data_india.maha[data_india.maha$time > as.Date('2020/1/1'), ]
+data_india.maha$cases = c(NA, diff(data_india.maha$Confirmed.Cases))
+goodData.maha = which( (data_india.maha$cases < 150000) & (data_india.maha$cases > 0) )
+data_india.maha = data_india.maha[goodData.maha, ]
+plot(data_india.maha$time, data_india.maha$cases, main="Daily New Cases of COVID-19 for Maharashtra State",xlab="Time", ylab="Number of Cases")
+
+#New York Data
+data_ny$time =as.Date(data_ny$date_of_interest, format = '%m/%d/%Y')
+data_ny = data_ny[data_ny$time > as.Date('2020/1/1'), ]
+goodData.ny = which( (data_ny$CASE_COUNT < 30000) & (data_ny$CASE_COUNT > 0) )
+data_ny = data_ny[goodData.ny, ]
+plot(data_ny$time, data_ny$CASE_COUNT,  main="Daily New Cases of COVID-19 for New York",xlab="Time", ylab="Number of Cases")
+
+##Belgium Data
+data_owid.bel <-data_owid[data_owid$location == "Belgium",]
+data_owid.bel$time =as.Date(data_owid.bel$date)
+data_owid.bel = data_owid.bel[data_owid.bel$time > as.Date('2020/1/1'), ]
+goodData.bel = which( (data_owid.bel$new_cases_smoothed < 30000) & (data_owid.bel$new_cases_smoothed > 0) )
+data_owid.bel = data_owid.bel[goodData.bel, ]
+plot(data_owid.bel$time, data_owid.bel$new_cases_smoothed, main="Daily New Cases of COVID-19 for Belgium",xlab="Time", ylab="Number of Cases" )
+
+#London Data
+data_london$time= as.Date(as.character(data_london$date ))
+data_london = data_london[data_london$time > as.Date('2020/1/1'), ]
+
+london_new <- data_london %>% 
+  group_by(time) %>%
+  summarise(total_cases=sum(cases))
+goodData.lon= which( (london_new$total_cases < 30000) & (london_new$total_cases > 0) )
+london_new = london_new[goodData.lon, ]
+plot(london_new$time, london_new$total_cases, main="Daily New Cases of COVID-19 for London",xlab="Time", ylab="Number of Cases" )
+```
+
+```{r}
+#SIR
+SIR = function(time, state, parameters) {
+with(as.list(c(state, parameters)), {
+dS= (-beta*S*I)
+dI= (beta*S*I)-(gamma*I)
+dR= gamma*I
+return(list(c(dS, dI, dR)))})
+}
+
+someParams = c(S = 0.5, I=0.001, beta = 0.25, gamma = 0.05)
+mySir = function(parameters, Stime) {
+init = parameters[c('S','I')]
+init = c(init, c(R = 1-sum(init)))
+out = as.data.frame(deSolve::ode(y = init, times = as.integer(Stime),
+func = SIR, parms = parameters[c('beta','gamma')]))
+out$P = out$I + out$R
+cbind(time = Stime, out[,-1], Y = c(diff(out$P), NA))
+}
+
+#out=as.data.frame(out)
+#out$P=out$I+out$R
+#out$Y=c(diff(out$P), NA)
+#out$time=timeSeq
+```
+
+
+```{r}
+#alpha maha
+pop = 12918999 #population in Maharashtra
+data_india.maha$casesProp = data_india.maha$cases / pop
+#plot(out1_maha[,c('time','Y')], lwd=2,
+#type='l', xlab='', xaxs='i',
+#ylab='Incidence')
+#points(data_india.maha$time, data_india.maha$casesProp)
+
+someParams_maha_alp = c(S = 0.182, I=0.0009, beta = 0.48, gamma = 0.045)
+out3_maha = mySir(someParams_maha_alp, seq(as.Date('2020/06/01'), by=1, len=160)) 
+forOpt = function(par, Stime) sum((mySir(par, Stime)[,'Y'] - data_india.maha[match(Stime, data_india.maha$time), 'casesProp']
+)^2, na.rm=TRUE)
+
+timeAlpha = seq(as.Date('2020/06/01'), as.Date('2020/11/08'), by=1)
+resAlpha = optim(someParams, forOpt,
+lower = c(0,0,0,0), upper= c(0.9,0.1,10,1),
+control = list(parscale = c(1, 0.001, 1, 0.1)), Stime = timeAlpha)
+outAlpha = mySir(resAlpha$par, timeAlpha)
+resAlpha[c('par','value','counts')]
+
+timeSeq_maha.alp=seq(as.Date('2020/06/01'), by=1, len=160)
+matplot(timeSeq_maha.alp, out3_maha[,-1], xlab="Time", ylab="Proportion",
+main="Epidemic Trajectory for Alpha Variant (a)", type='l', lty=1)
+legend('right', bty='n',
+legend = colnames(out3_maha)[-1],
+col = seq(1,ncol(out3_maha)-1), lty=1)
+
+#Delta Maha
+someParams_maha_del = c(S = 0.45, I=0.001, beta = 0.34, gamma = 0.086)
+out1_maha = mySir(someParams_maha_del, seq(as.Date('2021/02/13'), by=1, len=120))
+out1_maha[1:3,]
+
+timeDelta = seq(as.Date('2021/02/13'), as.Date('2021/06/13'), by=1)
+resDelta = optim(someParams, forOpt,
+lower = c(0,0,0,0), upper= c(0.9, 0.1,10,1),
+control = list(parscale = c(1, 0.001, 1, 0.1)), Stime = timeDelta)
+outDelta = mySir(resDelta$par, timeDelta)
+resDelta[c('par','value','counts')]
+
+timeSeq_maha.del=seq(as.Date('2021/02/13'), by=1, len=120)
+matplot(timeSeq_maha.del, out1_maha[,-1],xlab = "Time", ylab="Proportion",
+main="Epidemic Trajectory for Delta Variant (b)",type='l', lty=1)
+legend('right', bty='n',
+legend = colnames(out1_maha)[-1],
+col = seq(1,ncol(out1_maha)-1), lty=1)
+
+#Omicorn Maha
+someParams_maha_omi = c(S = 0.13, I=0.0025, beta = 2.49, gamma = 0.19)
+out2_maha = mySir(someParams_maha_omi, seq(as.Date('2021/12/31'), by=1, len=45))
+out2_maha[1:3,]
+
+timeOmicron = seq(as.Date('2021/12/31'), as.Date('2022/02/14'), by=1)
+resOmicron = optim(someParams, forOpt,
+lower = c(0,0,0,0), upper= c(0.9,0.1,10,1),
+control = list(parscale = c(1, 0.001, 1, 0.1)), Stime = timeOmicron)
+outOmicron = mySir(resOmicron$par, timeOmicron)
+resOmicron[c('par','value','counts')]
+
+timeSeq_maha.omi=seq(as.Date('2021/12/31'), by=1, len=45)
+matplot(timeSeq_maha.omi, out2_maha[,-1], xlab="Time", ylab="Proportion",
+main="Epidemic Trajectory for Omicron Variant (c)", type='l', lty=1)
+legend('right', bty='n',
+legend = colnames(out2_maha)[-1],
+col = seq(1,ncol(out2_maha)-1), lty=1)
+
+#Compare
+midOmicron = outOmicron[which.max(outOmicron$Y),'time']
+midDelta = outDelta[which.max(outDelta$Y),'time']
+midAlpha=outAlpha[which.max(outAlpha$Y),'time']
+
+plot(outDelta$time - midDelta, outDelta$Y,type='l',
+xlab='Days from Peak', ylab='Cases', main="Comparison Graph (d)")
+lines(outOmicron$time - midOmicron, outOmicron$Y, col='red')
+lines(outAlpha$time - midAlpha, outAlpha$Y, col='blue')
+legend('topright', bty='n', col=c('black','red','blue'), lty=1, lwd=2,
+legend=c('delta','omicron','alpha'))
+```
+
+```{r}
+#Alpha NY
+pop = 841900 #population in NY
+data_ny$casesProp = data_ny$CASE_COUNT / pop
+#plot(out1_ny[,c('time','Y')], lwd=2,
+#type='l', xlab='', xaxs='i',
+#ylab='Incidence')
+#points(data_ny$time, data_ny$casesProp)
+
+someParams_ny_alp = c(S = 0.9, I=0.0277, beta = 0.08, gamma = 0.0446)
+out3_ny=mySir(someParams_ny_alp, seq(as.Date('2020/11/15'), by=1, len=130))
+out3_ny[1:3,]
+forOpt = function(par, Stime) sum((
+mySir(par, Stime)[,'Y'] - data_ny[match(Stime, data_ny$time), 'casesProp']
+)^2, na.rm=TRUE)
+
+timeAlpha = seq(as.Date('2020/11/15'), as.Date('2021/03/25'), by=1)
+resAlpha = optim(someParams, forOpt,
+lower = c(0,0,0,0), upper= c(0.9,0.1,10,1),
+control = list(parscale = c(1, 0.001, 1, 0.1)), Stime = timeAlpha)
+outAlpha = mySir(resAlpha$par, timeAlpha)
+resAlpha[c('par','value','counts')]
+
+timeSeq_ny.alp=seq(as.Date('2020/11/15'), by=1, len=130)
+matplot(timeSeq_ny.alp, out3_ny[,-1], xlab="Time", ylab="Proportion",
+main="Epidemic Trajectory for Alpha Variant (a)", type='l', lty=1)
+legend('right', bty='n',
+legend = colnames(out3_ny)[-1],
+col = seq(1,ncol(out3_ny)-1), lty=1)
+
+#Delta NY
+someParams_ny_del = c(S = 0.30, I=0.0012, beta = 0.42, gamma = 0.081)
+out1_ny = mySir(someParams_ny_del, seq(as.Date('2021/06/1'), by=1, len=120))
+out1_ny[1:3,]
+
+timeDelta = seq(as.Date('2021/06/01'), as.Date('2021/10/01'), by=1)
+resDelta = optim(someParams, forOpt,
+lower = c(0,0,0,0), upper= c(0.9, 0.1,10,1),
+control = list(parscale = c(1, 0.001, 1, 0.1)), Stime = timeDelta)
+outDelta = mySir(resDelta$par, timeDelta)
+resDelta[c('par','value','counts')]
+
+timeSeq_ny.del=seq(as.Date('2021/06/01'), by=1, len=120)
+matplot(timeSeq_ny.del, out1_ny[,-1],xlab="Time", ylab="Proportion",
+main="Epidemic Trajectory for Delta Variant (b)", type='l', lty=1)
+legend('right', bty='n',
+legend = colnames(out1_ny)[-1],
+col = seq(1,ncol(out1_ny)-1), lty=1)
+
+#Omicorn NY
+someParams_ny_omi = c(S = 0.87, I=0.0064, beta = 0.139, gamma = 0.085)
+out2_ny = mySir(someParams_ny_omi, seq(as.Date('2021/11/22'), by=1, len=82))
+out2_ny[1:3,]
+
+timeOmicron = seq(as.Date('2021/11/22'), as.Date('2022/02/12'), by=1)
+resOmicron = optim(someParams, forOpt,
+lower = c(0,0,0,0), upper= c(0.9,0.1,10,1),
+control = list(parscale = c(1, 0.001, 1, 0.1)), Stime = timeOmicron)
+outOmicron = mySir(resOmicron$par, timeOmicron)
+resOmicron[c('par','value','counts')]
+
+timeSeq_ny.omi=seq(as.Date('2021/11/22'), by=1, len=82)
+matplot(timeSeq_ny.omi, out2_ny[,-1],xlab="Time", ylab="Proportion",
+main="Epidemic Trajectory for Omicron Variant (c)", type='l', lty=1)
+legend('right', bty='n',
+legend = colnames(out2_ny)[-1],
+col = seq(1,ncol(out2_ny)-1), lty=1)
+
+#Compare
+midOmicron = outOmicron[which.max(outOmicron$Y),'time']
+midDelta = outDelta[which.max(outDelta$Y),'time']
+midAlpha=outAlpha[which.max(outAlpha$Y),'time']
+
+plot(outOmicron$time - midOmicron, outOmicron$Y,type='l',
+xlab='Days from Peak', ylab='Cases', main="Comparison Graph")
+lines(outDelta$time - midDelta, outDelta$Y, col='red')
+lines(outAlpha$time - midAlpha, outAlpha$Y, col='blue')
+legend('topright', bty='n', col=c('black','red','blue'), lty=1, lwd=2,
+legend=c('omicron','delta','alpha'))
+```
+
+```{r}
+#Alpha Belgium
+pop = 1156000 #population in Belgium
+data_owid.bel$casesProp = data_owid.bel$new_cases_smoothed / pop
+#plot(out1_bel[,c('time','Y')], lwd=2,
+#type='l', xlab='', xaxs='i',
+#ylab='Incidence')
+#points(data_owid.bel$time, data_owid.bel$casesProp)
+
+someParams_bel_alp = c(S = 0.46, I=0.0015, beta = 0.56, gamma = 0.102)
+out3_bel=mySir(someParams_bel_alp, seq(as.Date('2020/09/27'), by=1, len=80))
+out3_bel[1:3,]
+forOpt = function(par, Stime) sum((
+mySir(par, Stime)[,'Y'] - data_owid.bel[match(Stime, data_owid.bel$time), 'casesProp']
+)^2, na.rm=TRUE)
+timeAlpha = seq(as.Date('2020/09/27'), as.Date('2020/12/16'), by=1)
+resAlpha = optim(someParams, forOpt,
+lower = c(0,0,0,0), upper= c(0.9,0.1,10,1),
+control = list(parscale = c(1, 0.001, 1, 0.1)), Stime = timeAlpha)
+outAlpha = mySir(resAlpha$par, timeAlpha)
+resAlpha[c('par','value','counts')]
+
+timeSeq_bel.alp=seq(as.Date('2020/09/27'), by=1, len=80)
+matplot(timeSeq_bel.alp, out3_bel[,-1],xlab="Time", ylab="Proportion",
+main="Epidemic Trajectory for Alpha Variant (a)",type='l', lty=1)
+legend('right', bty='n',
+legend = colnames(out3_bel)[-1],
+col = seq(1,ncol(out3_bel)-1), lty=1)
+
+#Delta Belgium
+someParams_bel_del = c(S = 0.86, I=0.0009, beta = 0.145, gamma = 0.041)
+out1_bel = mySir(someParams_bel_del, seq(as.Date('2021/09/14'), by=1, len=106))
+out1_bel[1:3,]
+
+timeDelta = seq(as.Date('2021/09/14'), as.Date('2021/12/28'), by=1)
+resDelta = optim(someParams, forOpt,
+lower = c(0,0,0,0), upper= c(0.9, 0.1,10,1),
+control = list(parscale = c(1, 0.001, 1, 0.1)), Stime = timeDelta)
+outDelta = mySir(resDelta$par, timeDelta)
+resDelta[c('par','value','counts')]
+
+timeSeq_bel.del=seq(as.Date('2021/09/14'), by=1, len=106)
+matplot(timeSeq_bel.del, out1_bel[,-1],xlab="Time", ylab="Proportion",
+main="Epidemic Trajectory for Delta Variant (b)",type='l', lty=1)
+legend('right', bty='n',
+legend = colnames(out1_bel)[-1],
+col = seq(1,ncol(out1_bel)-1), lty=1)
+
+#Omicorn Bel
+someParams_bel_omi = c(S = 0.9, I=0.07, beta = 0.099, gamma = 0.031)
+out2_bel = mySir(someParams_bel_omi, seq(as.Date('2021/12/28'), by=1, len=48))
+out2_bel[1:3,]
+
+timeOmicron = seq(as.Date('2021/12/28'), as.Date('2022/02/14'), by=1)
+resOmicron = optim(someParams, forOpt,
+lower = c(0,0,0,0), upper= c(0.9,0.1,10,1),
+control = list(parscale = c(1, 0.001, 1, 0.1)), Stime = timeOmicron)
+outOmicron = mySir(resOmicron$par, timeOmicron)
+resOmicron[c('par','value','counts')]
+
+timeSeq_bel.omi=seq(as.Date('2021/12/28'), by=1, len=48)
+matplot(timeSeq_bel.omi, out2_bel[,-1],xlab="Time", ylab="Proportion",
+main="Epidemic Trajectory for Omicron Variant (c)",type='l', lty=1)
+legend('right', bty='n',
+legend = colnames(out2_bel)[-1],
+col = seq(1,ncol(out2_bel)-1), lty=1)
+
+#Compare
+midOmicron = outOmicron[which.max(outOmicron$Y),'time']
+midDelta = outDelta[which.max(outDelta$Y),'time']
+midAlpha=outAlpha[which.max(outAlpha$Y),'time']
+
+plot(outOmicron$time - midOmicron, outOmicron$Y,type='l',
+xlab='Days from peak', ylab='Cases', main="Comparison Graph")
+lines(outDelta$time - midDelta, outDelta$Y, col='red')
+lines(outAlpha$time - midAlpha, outAlpha$Y, col='blue')
+legend('topright', bty='n', col=c('black','red','blue'), lty=1, lwd=2,
+legend=c('omicron','delta','alpha'))
+```
+```{r}
+#Alpha London
+pop = 898200 #population in London
+london_new$casesProp =london_new$total_cases / pop
+#plot(out1_lon[,c('time','Y')], lwd=2,
+#type='l', xlab='', xaxs='i',
+#ylab='Incidence')
+#points(london_new$time, london_new$casesProp)
+
+someParams_lon_alp = c(S = 0.89, I=0.002, beta = 0.27, gamma = 0.14)
+out3_lon=mySir(someParams_lon_alp, seq(as.Date('2020/11/15'), by=1, len=78))
+out3_lon[1:3,]
+forOpt = function(par, Stime) sum((
+mySir(par, Stime)[,'Y'] - london_new[match(Stime, london_new$time), 'casesProp']
+)^2, na.rm=TRUE)
+
+timeAlpha = seq(as.Date('2020/11/15'), as.Date('2021/02/01'), by=1)
+forOpt(someParams, timeAlpha)
+resAlpha = optim(someParams, forOpt,
+lower = c(0,0,0,0), upper= c(0.9,0.1,10,1),
+control = list(parscale = c(1, 0.001, 1, 0.1)), Stime = timeAlpha)
+outAlpha = mySir(resAlpha$par, timeAlpha)
+resAlpha[c('par','value','counts')]
+
+timeSeq_lon.alp=seq(as.Date('2021/11/15'), by=1, len=78)
+matplot(timeSeq_lon.alp, out3_lon[,-1],xlab="Time", ylab="Proportion",
+main="Epidemic Trajectory for Alpha Variant (a)",type='l', lty=1)
+legend('right', bty='n',
+legend = colnames(out3_lon)[-1],
+col = seq(1,ncol(out3_lon)-1), lty=1)
+
+
+#Delta London
+someParams_lon_del = c(S = 0.9, I=0.0055, beta = 0.21, gamma = 0.142)
+out1_lon = mySir(someParams_lon_del, seq(as.Date('2021/06/01'), by=1, len=100))
+out1_lon[1:3,]
+
+timeDelta = seq(as.Date('2021/06/01'), as.Date('2021/09/09'), by=1)
+resDelta = optim(someParams, forOpt,
+lower = c(0,0,0,0), upper= c(0.9, 0.1,10,1),
+control = list(parscale = c(1, 0.001, 1, 0.1)), Stime = timeDelta)
+outDelta = mySir(resDelta$par, timeDelta)
+resDelta[c('par','value','counts')]
+
+timeSeq_lon.del=seq(as.Date('2021/06/01'), by=1, len=100)
+matplot(timeSeq_lon.del, out1_lon[,-1],xlab="Time", ylab="Proportion",
+main="Epidemic Trajectory for Delta Variant (b)", type='l', lty=1)
+legend('right', bty='n',
+legend = colnames(out1_lon)[-1],
+col = seq(1,ncol(out1_lon)-1), lty=1)
+
+#Omicorn Lon
+someParams_lon_omi = c(S = 0.9, I=0.1, beta = 0.14, gamma = 0.043)
+out2_lon = mySir(someParams_lon_omi, seq(as.Date('2021/12/15'), by=1, len=57))
+out2_bel[1:3,]
+
+timeOmicron = seq(as.Date('2021/12/15'), as.Date('2022/02/10'), by=1)
+resOmicron = optim(someParams, forOpt,
+lower = c(0,0,0,0), upper= c(0.9,0.1,10,1),
+control = list(parscale = c(1, 0.001, 1, 0.1)), Stime = timeOmicron)
+outOmicron = mySir(resOmicron$par, timeOmicron)
+resOmicron[c('par','value','counts')]
+
+timeSeq_lon.omi=seq(as.Date('2021/12/15'), by=1, len=57)
+matplot(timeSeq_lon.omi, out2_lon[,-1],xlab="Time", ylab="Proportion",
+main="Epidemic Trajectory for Omicron Variant (c)",type='l', lty=1)
+legend('right', bty='n',
+legend = colnames(out2_lon)[-1],
+col = seq(1,ncol(out2_lon)-1), lty=1)
+
+#Compare
+midOmicron = outOmicron[which.max(outOmicron$Y),'time']
+midDelta = outDelta[which.max(outDelta$Y),'time']
+midAlpha=outAlpha[which.max(outAlpha$Y),'time']
+
+plot(outOmicron$time - midOmicron, outOmicron$Y,type='l',
+xlab='Days from Peak', ylab='Cases', main="Comparison Graph")
+lines(outDelta$time - midDelta, outDelta$Y, col='red')
+lines(outAlpha$time - midAlpha, outAlpha$Y, col='blue')
+legend('topright', bty='n', col=c('black','red','blue'), lty=1, lwd=2,
+legend=c('omicron','delta','alpha'))
+```
+
+## Question 2
+```{r}
+library("EpiILMCT", quietly = TRUE)
+N = 500
+net <- contactnet(type = "random", num.id = N, beta = 1)
+rate = c(transmission = 4/2000, recovery = 0.086, spark = 0.001)
+set.seed(7394)
+Ninitial = 1 + rpois(1, rate["spark"] * (N - 1))
+removalTimes = rexp(Ninitial, rate = rate["recovery"])
+initialepi = cbind(ID = seq(1, len = Ninitial), removal = removalTimes,
+infectiousPeriod = removalTimes, infectionTime = 0)
+
+epi <- datagen(type = "SIR", kerneltype = "network",
+kernelmatrix = net, suspar = rate["transmission"],
+spark = rate["spark"], delta = c(shape = 1, rate = rate["recovery"]),
+initialepi = initialepi)
+
+set.seed(4937)
+Ninitial2 = 1 + rpois(1, rate['spark']*(N-1))
+removalTimes2 = rexp(Ninitial2, rate = rate["recovery"])
+initialepi2 = cbind(ID = seq(1, len=Ninitial2), 
+	removal = removalTimes2,
+	infectiousPeriod=removalTimes2, 
+	infectionTime=0)
+epi2 <- datagen(type = "SIR", kerneltype = "network",
+      kernelmatrix = net, suspar = rate['transmission'],
+      spark = rate['spark'],
+      delta = c(shape=1, rate=rate['recovery']),
+ 	  initialepi = initialepi2)
+
+
+
+d1 = density(epi$epidat[, "inf.time"], from = 0)[c("x",
+"y")]
+d2 = density(epi2$epidat[, "inf.time"], from = 0)[c("x",
+"y")]
+
+theYlim = c(0, max(c(max(d1$y), max(d2$y))))
+theXlim = c(-1, max(c(max(d1$x), max(d2$x))))
+
+plot(d1, type='l', xlab='Time', ylab='Density', main="Infectious Time of Simulation 1",
+     ylim = theYlim, xlim= theXlim, xaxs='i')
+points(epi$epidat[,"inf.time"],rep(0,nrow(epi$epidat)), col="#FF000030", pch=16)
+
+plot(d2, type='l', xlab='Time', ylab='Density', main="Infectious Time of Simulation 2",
+     ylim = theYlim, xlim= theXlim, xaxs='i')
+points(epi2$epidat[,"inf.time"],rep(0,nrow(epi2$epidat)), col="#FF000030", pch=16)
+```
+```{r}
+#Model Fitting
+Nchains = 4
+qgamma(c(0.025, 0.975), shape = 10, rate = 10 )
+qgamma(c(0.025, 0.975), shape = 100, rate = 100 )
+sucControl = list(
+	config=list(initial = matrix(0.002, 1, Nchains),
+		prior=c(prior='gamma', shape=20, rate=20/0.002, varProp = 0.007^2)),  
+	covariate = rep(1, N) )
+sparkControl = list(initial = matrix(0.01,1,Nchains),
+	prior = c(prior='gamma', shape=20, rate=20/0.01, varProp=0.05^2))
+mcmc1 <- epictmcmc(object = epi, datatype = "known epidemic",
+      nsim = 500, nchains = Nchains, control.sus = sucControl, 
+      spark.par = sparkControl, parallel = TRUE)
+mcmc2 <- epictmcmc(object = epi2, datatype = "known epidemic",
+      nsim = 500, nchains = Nchains, control.sus = sucControl, spark.par = sparkControl,
+  parallel = TRUE)
+
+burnin = -(1:100)
+
+theSamples = do.call(abind::abind, c(mcmc1$parameter.samples, list(along=3)) )
+theSamples2 = do.call(abind::abind, c(mcmc2$parameter.samples, list(along=3)) )
+matplot(theSamples[,1,], type='l', 
+	xlab='Iterations', ylab='Transimission Rate', main="The Infection Trace Plot",
+	ylim = range(theSamples[burnin,1, ]), lty=1, log='y')
+
+matplot(theSamples[,2,], type='l', 
+	xlab='Iterations', ylab='Spark Infectious Rate', main="The Infection Trace Plot",
+	ylim = range(theSamples[burnin,2, ]), lty=1, log='y')
+
+d1 = density(as.vector(theSamples[burnin,1,]))[c('x','y')]
+d2 = density(as.vector(theSamples2[burnin,1,]))[c('x','y')]
+
+plot(d1, type='l', ylim = c(0, max(c(d1$y, d2$y))),
+	xlim = quantile(theSamples[burnin,1,], c(0.001, 0.999)),
+	xlab='Transimission Rate', ylab='Density')
+lines(d2, col='red')
+lines(d1$x, dgamma(d1$x, 
+	shape = as.numeric(sucControl$config$prior['shape']),
+	rate = as.numeric(sucControl$config$prior['rate'])), 
+	col='blue')
+legend("topright", lty=1, lwd=2, col=c('black','red','blue'), 
+	legend= c('sim 1', 'sim 2','prior'), bty='n')
+
+d1 = density(as.vector(theSamples[burnin,2,]))[c('x','y')]
+d2 = density(as.vector(theSamples2[burnin,2,]))[c('x','y')]
+
+plot(d1, type='l', ylim = c(0, max(c(d1$y, d2$y))),
+	xlim = quantile(theSamples[burnin,2,], c(0.001, 0.999)),
+	xlab='Spark Infection Rate', ylab='Density')
+lines(d2, col='red')
+lines(d1$x, dgamma(d1$x, 
+	shape = as.numeric(sparkControl$prior['shape']),
+	rate = as.numeric(sparkControl$prior['rate'])), 
+	col='blue')
+legend("topright", lty=1, lwd=2, col=c('black','red','blue'), 
+	legend= c('sim 1', 'sim 2','prior'), bty='n')
+
+```
+
+
+
+```{r}
+#Incubation
+Nsmall = 100
+Nchains = 4
+netSmall <- contactnet(type = "random", num.id = Nsmall, beta = 1)
+ratesIncubation = c(
+	transmission = 0.002, 
+	incubation = 0.04,
+	delay = 0.16,
+	spark=0.001)
+
+set.seed(7394)
+epiIncubation <- datagen(
+	type = "SINR", kerneltype = "network",
+    kernelmatrix = netSmall, suspar = ratesIncubation['transmission'],
+    spark = ratesIncubation['spark'],
+    delta = rbind(
+    incubation= c(2,ratesIncubation['incubation']), 
+        delay = c(1, ratesIncubation['delay'])
+    	)
+    )
+
+epiIncubation2 <- datagen(
+	type = "SINR", kerneltype = "network",
+    kernelmatrix = netSmall, suspar = ratesIncubation['transmission'],
+    spark = ratesIncubation['spark'],
+    delta = rbind(
+    	incubation = c(2,ratesIncubation['incubation']), 
+        delay = c(1, ratesIncubation['delay'])
+    	)
+    )
+
+d1 = density(epiIncubation$epidat[,"inf.time"], from=0)[c('x','y')]
+d2 = density(epiIncubation2$epidat[,"inf.time"], from=0)[c('x','y')]
+
+theYlim = c(0, max(c(max(d1$y), max(d2$y))))
+theXlim = c(-1, max(c(max(d1$x), max(d2$x))))
+
+plot(d1, type='l', xlab='Time', ylab='Density', ylim = theYlim, xlim= theXlim,
+     main="Infectious Times of Simulation 1", xaxs='i')
+points(epi$epidat[,"inf.time"],rep(0,nrow(epi$epidat)), col="#FF000030", pch=16)
+
+plot(d2, type='l', xlab='Time', ylab='Density', ylim = theYlim, xlim= theXlim,
+     main="Infectious Times of Simulation 2", xaxs='i')
+points(epi2$epidat[,"inf.time"],rep(0,nrow(epi2$epidat)), col="#FF000030", pch=16)
+```
+```{r}
+incubationControl = list(
+	shape = c(incubation = 1, delay=1), 
+	initial = matrix(c(incubation = 0.04, delay=0.16), 2, Nchains),
+	prior = rbind(
+		incubation = c(shape = 20, rate = 20/0.04),
+		delay = c(shape = 20, rate = 20/0.16)
+	))
+sucControl = list(
+	config = list(
+		initial = matrix(5e-4,1, Nchains), 
+		prior = c(prior='gamma', shape=20, rate=20/0.002, varProp = 0.007^2)),  
+	covariate = rep(1, Nsmall) 
+)
+sparkControl = list(
+	initial = matrix(1e-4, 1, Nchains),
+	prior = c(prior='gamma', shape=20, rate=20/0.001, varProp=0.02^2)
+)
+
+mcmcIncubation = epictmcmc(
+	object = epiIncubation,
+	datatype = "unknown removal",
+	nsim = 500,
+	nchains = Nchains,
+	control.sus = sucControl,
+	delta = incubationControl,
+	spark.par = sparkControl,
+	parallel = TRUE
+)
+
+mcmcIncubation2 = epictmcmc(
+	object = epiIncubation2,
+	datatype = "unknown removal",
+	nsim = 500,
+	nchains = Nchains,
+	control.sus = sucControl,
+	delta = incubationControl,
+	spark.par = sparkControl,
+	parallel = TRUE
+)
+
+mcmc1 = mcmcIncubation
+mcmc2 = mcmcIncubation2
+
+theSamples = do.call(abind::abind, c(mcmc1$parameter.samples, list(along=3)) )
+theSamples2 = do.call(abind::abind, c(mcmc2$parameter.samples, list(along=3)) )
+
+matplot(theSamples[,3,], type='l', 
+	xlab='Iteration', ylab='Transimission Rate',main="Trace Plot",
+	ylim = range(theSamples[burnin,3, ]), lty=1, log='y')
+
+matplot(theSamples[,4,], type='l', 
+	xlab='Iteration', ylab='Spark Infection Rate', main="Trace Plot",
+	ylim = range(theSamples[burnin,4, ]), lty=1, log='y')
+
+d1 = density(as.vector(theSamples[burnin,3,]))[c('x','y')]
+d2 = density(as.vector(theSamples2[burnin,3,]))[c('x','y')]
+
+plot(d1, type='l', ylim = c(0, max(c(d1$y, d2$y))),
+	xlim = quantile(theSamples[burnin,3,], c(0.001, 0.999)),
+	xlab='Transimission Rate', ylab='Density')
+lines(d2, col='red')
+lines(d1$x, dgamma(d1$x, 
+	shape = as.numeric(incubationControl$prior['incubation','shape']),
+	rate = as.numeric(incubationControl$prior['incubation','rate'])), 
+	col='blue')
+legend("topright", lty=1, lwd=2, col=c('black','red','blue'), 
+	legend= c('sim 1', 'sim 2','prior'), bty='n')
+
+d1 = density(as.vector(theSamples[burnin,4,]))[c('x','y')]
+d2 = density(as.vector(theSamples2[burnin,4,]))[c('x','y')]
+
+plot(d1, type='l', ylim = c(0, max(c(d1$y, d2$y))),
+	xlim = quantile(theSamples[burnin,4,], c(0.001, 0.999)),
+	xlab='Spark Infection Rate', ylab='Density')
+lines(d2, col='red')
+lines(d1$x, dgamma(d1$x, 
+	shape = as.numeric(incubationControl$prior['delay','shape']),
+	rate = as.numeric(incubationControl$prior['delay','rate'])), 
+	col='blue')
+legend("topright", lty=1, lwd=2, col=c('black','red','blue'), 
+	legend= c('sim 1', 'sim 2','prior'), bty='n')
+```
+
+```{r}
+#Incubation 5 days
+Nsmall = 100
+Nchains = 4
+netSmall <- contactnet(type = "random", num.id = Nsmall, beta = 1)
+ratesIncubation = c(
+	transmission = 0.002, 
+	incubation = 0.04,
+	delay = 0.16,
+	spark=0.001)
+
+set.seed(111)
+epiIncubation <- datagen(
+	type = "SINR", kerneltype = "network",
+    kernelmatrix = netSmall, suspar = ratesIncubation['transmission'],
+    spark = ratesIncubation['spark'],
+    delta = rbind(
+    incubation= c(5,ratesIncubation['incubation']), 
+        delay = c(1, ratesIncubation['delay'])
+    	)
+    )
+
+epiIncubation2 <- datagen(
+	type = "SINR", kerneltype = "network",
+    kernelmatrix = netSmall, suspar = ratesIncubation['transmission'],
+    spark = ratesIncubation['spark'],
+    delta = rbind(
+    	incubation = c(5,ratesIncubation['incubation']), 
+        delay = c(1, ratesIncubation['delay'])
+    	)
+    )
+
+d1 = density(epiIncubation$epidat[,"inf.time"], from=0)[c('x','y')]
+d2 = density(epiIncubation2$epidat[,"inf.time"], from=0)[c('x','y')]
+
+theYlim = c(0, max(c(max(d1$y), max(d2$y))))
+theXlim = c(-1, max(c(max(d1$x), max(d2$x))))
+
+plot(d1, type='l', xlab='Time', ylab='Density', ylim = theYlim, xlim= theXlim,
+     main="Infectious Times of Simulation 1", xaxs='i')
+points(epi$epidat[,"inf.time"],rep(0,nrow(epi$epidat)), col="#FF000030", pch=16)
+
+plot(d2, type='l', xlab='Time', ylab='Density', ylim = theYlim, xlim= theXlim,
+     main="Infectious Times of Simulation 2", xaxs='i')
+points(epi2$epidat[,"inf.time"],rep(0,nrow(epi2$epidat)), col="#FF000030", pch=16)
+```
+
+```{r}
+#Model Fitting
+incubationControl = list(
+	shape = c(incubation = 1, delay=1), 
+	initial = matrix(c(incubation = 0.04, delay=0.16), 2, Nchains),
+	prior = rbind(
+		incubation = c(shape = 20, rate = 20/0.04),
+		delay = c(shape = 20, rate = 20/0.16)
+	))
+sucControl = list(
+	config = list(
+		initial = matrix(5e-4,1, Nchains), 
+		prior = c(prior='gamma', shape=20, rate=20/0.002, varProp = 0.007^2)),  
+	covariate = rep(1, Nsmall) 
+)
+sparkControl = list(
+	initial = matrix(1e-4, 1, Nchains),
+	prior = c(prior='gamma', shape=20, rate=20/0.001, varProp=0.02^2)
+)
+
+mcmcIncubation = epictmcmc(
+	object = epiIncubation,
+	datatype = "unknown removal",
+	nsim = 500,
+	nchains = Nchains,
+	control.sus = sucControl,
+	delta = incubationControl,
+	spark.par = sparkControl,
+	parallel = TRUE
+)
+
+mcmcIncubation2 = epictmcmc(
+	object = epiIncubation2,
+	datatype = "unknown removal",
+	nsim = 500,
+	nchains = Nchains,
+	control.sus = sucControl,
+	delta = incubationControl,
+	spark.par = sparkControl,
+	parallel = TRUE
+)
+
+mcmc1 = mcmcIncubation
+mcmc2 = mcmcIncubation2
+
+theSamples = do.call(abind::abind, c(mcmc1$parameter.samples, list(along=3)) )
+theSamples2 = do.call(abind::abind, c(mcmc2$parameter.samples, list(along=3)) )
+
+matplot(theSamples[,3,], type='l', 
+	xlab='Iteration', ylab='Transimission Rate', main="Trace Plot",
+	ylim = range(theSamples[burnin,3, ]), lty=1, log='y')
+
+matplot(theSamples[,4,], type='l', 
+	xlab='Iteration', ylab='Spark Infection Rate',main="Trace Plot",
+	ylim = range(theSamples[burnin,4, ]), lty=1, log='y')
+
+d1 = density(as.vector(theSamples[burnin,3,]))[c('x','y')]
+d2 = density(as.vector(theSamples2[burnin,3,]))[c('x','y')]
+
+plot(d1, type='l', ylim = c(0, max(c(d1$y, d2$y))),
+	xlim = quantile(theSamples[burnin,3,], c(0.001, 0.999)),
+	xlab='Transimission Rate', ylab='Density')
+lines(d2, col='red')
+lines(d1$x, dgamma(d1$x, 
+	shape = as.numeric(incubationControl$prior['incubation','shape']),
+	rate = as.numeric(incubationControl$prior['incubation','rate'])), 
+	col='blue')
+legend("topright", lty=1, lwd=2, col=c('black','red','blue'), 
+	legend= c('sim 1', 'sim 2','prior'), bty='n')
+
+d1 = density(as.vector(theSamples[burnin,4,]))[c('x','y')]
+d2 = density(as.vector(theSamples2[burnin,4,]))[c('x','y')]
+
+plot(d1, type='l', ylim = c(0, max(c(d1$y, d2$y))),
+	xlim = quantile(theSamples[burnin,4,], c(0.001, 0.999)),
+	xlab='Spark Infection Rate', ylab='Density')
+lines(d2, col='red')
+lines(d1$x, dgamma(d1$x, 
+	shape = as.numeric(incubationControl$prior['delay','shape']),
+	rate = as.numeric(incubationControl$prior['delay','rate'])), 
+	col='blue')
+
+```
+
